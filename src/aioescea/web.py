@@ -34,8 +34,12 @@ from .exceptions import EsceaAuthError, EsceaConnectionError, EsceaError
 
 _LOGGER = logging.getLogger(__name__)
 
-READ_TIMEOUT = 10.0
-WRITE_TIMEOUT = 30.0
+# The fire's web server is slow: pages often take 10-20 s and the login can
+# take longer. Shorter timeouts gave up on fires that were working, and an
+# abandoned request keeps the single-threaded server busy for the next one.
+READ_TIMEOUT = 30.0
+LOGIN_TIMEOUT = 60.0
+WRITE_TIMEOUT = 60.0
 TIMER_NUMBERS = (1, 2)
 
 _TOKEN_INPUT_RE = re.compile(r"<input\b[^>]*\b(?:name|id)=[\"']token[\"'][^>]*>", re.I)
@@ -263,6 +267,7 @@ class EsceaWebClient:
                 "user": _md5(self._username or ""),
                 "password": _md5(self._password or ""),
             },
+            timeout=LOGIN_TIMEOUT,
         )
         tag = _TOKEN_INPUT_RE.search(page)
         value = _VALUE_RE.search(tag[0]) if tag else None

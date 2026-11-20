@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.2
+
+Fixes.
+
+- The web page timeouts are longer: 30 s to read a page, 60 s to log in or
+  save timers (were 10 s and 30 s). Fire web servers often take 10-20 s per
+  page, so a working login was reported as "didn't answer".
+
 ## 0.1.1
 
 Fixes.
