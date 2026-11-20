@@ -188,3 +188,30 @@ async def test_closed_transport_reopens(
     assert not transport.is_open
     await fireplace.async_get_status()
     assert transport.is_open
+
+
+async def test_turn_off_when_already_off_is_not_busy(
+    fireplace: EsceaFireplace, fake_fire: FakeFire
+) -> None:
+    """Turning off a fire that's already off doesn't block turning it on."""
+    await fireplace.async_get_status()
+    await fireplace.async_turn_off()
+    assert fireplace.busy_remaining == 0
+    await fireplace.async_turn_on()
+    assert fake_fire.state.is_on
+
+
+async def test_turn_off_unknown_state_is_busy(
+    fireplace: EsceaFireplace, fake_fire: FakeFire
+) -> None:
+    """With no status read yet, assume the fire may be shutting down."""
+    await fireplace.async_turn_off()
+    assert fireplace.busy_remaining > 60
+
+
+async def test_half_degrees_round_up(
+    fireplace: EsceaFireplace, fake_fire: FakeFire
+) -> None:
+    """22.5 °C becomes 23, not 22 (Python's round() would give 22)."""
+    await fireplace.async_set_temperature(22.5)
+    assert fake_fire.state.target == 23

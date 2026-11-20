@@ -131,3 +131,18 @@ async def test_unreachable() -> None:
         web = EsceaWebClient(session, "127.0.0.1:9")
         with pytest.raises(EsceaError):
             await web.async_get_home_page()
+
+
+async def test_set_timer_after_token_expired(
+    web: EsceaWebClient, fake_web: FakeWeb
+) -> None:
+    """A save with an expired token logs in again and resends."""
+    await web.async_validate_login()
+    current = (await web.async_get_home_page()).timers
+    fake_web.expire_next_token = True
+    page = await web.async_set_timer(
+        Timer(2, None, None, True), fire_is_on=False, current=current
+    )
+    assert page.timers[2].enabled is True
+    assert len(fake_web.saves) == 2
+    assert len(fake_web.logins) == 2

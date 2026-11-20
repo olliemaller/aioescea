@@ -246,6 +246,8 @@ class EsceaWebClient:
                 headers={"Connection": "close"},
                 timeout=aiohttp.ClientTimeout(total=timeout),
             ) as response:
+                if response.status in (401, 403):
+                    raise EsceaAuthError(f"{method} /{path}: HTTP {response.status}")
                 response.raise_for_status()
                 return await response.text(errors="replace")
         except (aiohttp.ClientError, TimeoutError) as err:
@@ -319,20 +321,29 @@ class EsceaWebClient:
         async with self._lock:
             if not self.has_credentials:
                 raise EsceaAuthError("no web login set")
-            if self._token is None:
-                self._token = await self._login()
-            try:
-                await self._request(
-                    "POST",
-                    "index.html",
-                    data=form,
-                    token=self._token,
-                    timeout=WRITE_TIMEOUT,
-                )
-            except EsceaConnectionError:
-                # The fire can be slow to answer a save (it writes to flash).
-                # A lost reply does not mean a lost save, so check below.
-                _LOGGER.debug("No reply to timer save; checking by reading back")
+            for attempt in range(2):
+                if self._token is None or attempt:
+                    self._token = await self._login()
+                try:
+                    reply = await self._request(
+                        "POST",
+                        "index.html",
+                        data=form,
+                        token=self._token,
+                        timeout=WRITE_TIMEOUT,
+                    )
+                except EsceaConnectionError:
+                    # The fire can be slow to answer a save (it writes to
+                    # flash). A lost reply doesn't mean a lost save, so check
+                    # by reading back below.
+                    _LOGGER.debug("No reply to timer save; checking by reading back")
+                    break
+                if not _is_login_page(reply):
+                    break
+                # The token had expired, so the fire ignored the form and
+                # served its public page. Log in again and resend once.
+                _LOGGER.debug("Timer save needed a fresh login")
+                self._token = None
             await asyncio.sleep(1)
             page = parse_home_page(await self._request("GET", "index.html"))
 

@@ -100,6 +100,13 @@ class NcapiStatus:
         return self.fire_type == "gas"
 
 
+def _int(value: Any) -> int:
+    """Read a whole number the fire may send as 225, "225" or 225.0."""
+    if isinstance(value, bool):
+        raise TypeError("expected a number, got a boolean")
+    return round(float(value))
+
+
 def parse_status(data: dict[str, Any]) -> NcapiStatus:
     """Parse the JSON the fire returns for ``GET /``."""
     try:
@@ -109,12 +116,12 @@ def parse_status(data: dict[str, Any]) -> NcapiStatus:
             if raw_state in FireState._value2member_map_
             else FireState.UNKNOWN
         )
-        room = int(data["room_temp_deci_c"])
+        room = _int(data["room_temp_deci_c"])
         return NcapiStatus(
             state=state,
             fan_boost=bool(data.get("fan_boost", False)),
             flame_effect=bool(data.get("flame_effect", False)),
-            target_temperature=int(data["target_temp_deci_c"]) / 10,
+            target_temperature=_int(data["target_temp_deci_c"]) / 10,
             room_temperature=None if room <= NO_ROOM_TEMPERATURE else room / 10,
             remote_present=bool(data.get("remote_present", False)),
             has_errors=bool(data.get("errors", False)),
@@ -137,9 +144,16 @@ class EsceaNcapiError(EsceaError):
 class EsceaNcapiClient:
     """Talk to a Generation 3 fire's NCAPI."""
 
-    def __init__(self, session: aiohttp.ClientSession, host: str) -> None:
+    def __init__(
+        self,
+        session: aiohttp.ClientSession,
+        host: str,
+        *,
+        timeout: float = REQUEST_TIMEOUT,
+    ) -> None:
         self._session = session
         self._host = host
+        self._timeout = timeout
         self._lock = asyncio.Lock()
         self._last_request = 0.0
         self._last_status: NcapiStatus | None = None
@@ -168,7 +182,7 @@ class EsceaNcapiClient:
                     method,
                     f"http://{self._host}/",
                     params=params,
-                    timeout=aiohttp.ClientTimeout(total=REQUEST_TIMEOUT),
+                    timeout=aiohttp.ClientTimeout(total=self._timeout),
                 ) as response:
                     self._last_request = time.monotonic()
                     if response.status != 200:
@@ -249,9 +263,11 @@ def _error_for(status: int) -> EsceaError:
     return EsceaNcapiError(status, message)
 
 
-async def async_probe(session: aiohttp.ClientSession, host: str) -> NcapiStatus | None:
+async def async_probe(
+    session: aiohttp.ClientSession, host: str, *, timeout: float = REQUEST_TIMEOUT
+) -> NcapiStatus | None:
     """Return the status if ``host`` answers as an NCAPI fire, otherwise None."""
-    client = EsceaNcapiClient(session, host)
+    client = EsceaNcapiClient(session, host, timeout=timeout)
     try:
         return await client.async_get_status()
     except EsceaError:

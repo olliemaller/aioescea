@@ -97,7 +97,8 @@ class FakeWeb:
     async def save(self, request: web.Request) -> web.Response:
         form = list((await request.post()).items())
         self.saves.append([(k, str(v)) for k, v in form])
-        if self._logged_in(request) and not self.ignore_saves:
+        logged_in = self._logged_in(request)
+        if logged_in and not self.ignore_saves:
             values = dict(self.saves[-1])
             for n in (1, 2):
                 self.timers[n] = [
@@ -106,7 +107,7 @@ class FakeWeb:
                     values[f"TIMER{n}_SW"] == "On",
                 ]
             self.fire_is_on = values["ON_OFF_SWITCH"] == "On"
-        return await self.index(request)
+        return self._index(logged_in)
 
     async def diagnostics(self, request: web.Request) -> web.Response:
         if not self._logged_in(request):

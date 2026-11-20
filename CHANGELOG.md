@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.1.1
+
+Fixes.
+
+- Turning off a fire that's already off no longer starts the 66 s busy
+  window, so a routine "make sure it's off" can't block turning it on.
+- Half degrees round up (22.5 °C sets 23 °C). Python's `round()` rounded
+  them to the nearest even number, so 22.5 became 22.
+- Saving a timer after the web login token expired now logs in again and
+  resends, instead of failing with "did not save".
+- The web page answering 401 or 403 raises `EsceaAuthError`, not a
+  connection error.
+- NCAPI temperatures sent as strings or decimals (`"225"`, `225.0`) parse.
+- `EsceaNcapiClient` and `async_probe` take a `timeout`, so a quick probe
+  doesn't wait the full 10 s on an address that isn't a Wi-Fi fire.
+- New `round_half_up()` helper.
+
 ## 0.1.0
 
 First release.

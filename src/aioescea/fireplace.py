@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import StrEnum
 import logging
+import math
 import time
 
 from .exceptions import EsceaBusyError, EsceaStateError
@@ -38,6 +39,11 @@ class FireMode(StrEnum):
     BOOST = "boost"
     #: Flame effect on: flames for looks, very little heat.
     FLAME_EFFECT = "flame_effect"
+
+
+def round_half_up(value: float) -> int:
+    """Round to the nearest whole degree, halves up (22.5 -> 23, not 22)."""
+    return math.floor(value + 0.5)
 
 
 def mode_from_status(status: Status) -> FireMode:
@@ -144,13 +150,17 @@ class EsceaFireplace:
         only act on this once it is ready, so callers should read the status
         again afterwards.
         """
+        was_off = self._last_status is not None and not self._last_status.is_on
         await self._send(Command.POWER_OFF)
-        self._busy_until = time.monotonic() + POWER_CHANGE_BUSY_SECONDS
+        # An already-off fire has nothing to shut down, so it isn't busy. Without
+        # this, a routine "make sure it's off" would block turning it on for 66 s.
+        if not was_off:
+            self._busy_until = time.monotonic() + POWER_CHANGE_BUSY_SECONDS
 
     async def async_set_temperature(self, temperature: float) -> None:
         """Set the target room temperature (whole °C, 4 to 30)."""
         self._check_ready()
-        degrees = round(temperature)
+        degrees = round_half_up(temperature)
         if not MIN_TEMPERATURE <= degrees <= MAX_TEMPERATURE:
             raise EsceaStateError(
                 f"{temperature} °C is outside {MIN_TEMPERATURE}-{MAX_TEMPERATURE} °C"

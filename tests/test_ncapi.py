@@ -20,6 +20,7 @@ from aioescea import (
     async_probe,
 )
 import aioescea.ncapi as ncapi_module
+from aioescea.ncapi import parse_status
 
 
 @dataclass
@@ -208,3 +209,12 @@ async def test_probe_html_page_is_not_ncapi() -> None:
     async with aiohttp.ClientSession() as session:
         assert await async_probe(session, f"127.0.0.1:{server.port}") is None
     await server.close()
+
+
+def test_parse_tolerates_number_formats() -> None:
+    """Temperatures sent as strings or floats still parse."""
+    status = parse_status(
+        {"state": "heating", "target_temp_deci_c": "225", "room_temp_deci_c": 190.0}
+    )
+    assert status.target_temperature == 22.5
+    assert status.room_temperature == 19.0

@@ -18,6 +18,7 @@ from .fireplace import (
     FireMode,
     FireplaceState,
     mode_from_status,
+    round_half_up,
 )
 from .ncapi import (
     NCAPI_MAX_TEMPERATURE,
@@ -32,7 +33,7 @@ from .protocol import MAX_TEMPERATURE, MIN_TEMPERATURE, Status
 from .transport import UDP_PORT, EsceaTransport
 from .web import Diagnostics, EsceaWebClient, HomePage, Timer
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 __all__ = [
     "MAC_PREFIX",
@@ -68,4 +69,5 @@ __all__ = [
     "async_find",
     "async_probe",
     "mode_from_status",
+    "round_half_up",
 ]
