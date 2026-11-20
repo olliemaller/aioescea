@@ -19,6 +19,15 @@ from .fireplace import (
     FireplaceState,
     mode_from_status,
 )
+from .ncapi import (
+    NCAPI_MAX_TEMPERATURE,
+    NCAPI_MIN_TEMPERATURE,
+    EsceaNcapiClient,
+    EsceaNcapiError,
+    FireState,
+    NcapiStatus,
+    async_probe,
+)
 from .protocol import MAX_TEMPERATURE, MIN_TEMPERATURE, Status
 from .transport import UDP_PORT, EsceaTransport
 from .web import Diagnostics, EsceaWebClient, HomePage, Timer
@@ -29,6 +38,8 @@ __all__ = [
     "MAC_PREFIX",
     "MAX_TEMPERATURE",
     "MIN_TEMPERATURE",
+    "NCAPI_MAX_TEMPERATURE",
+    "NCAPI_MIN_TEMPERATURE",
     "POWER_CHANGE_BUSY_SECONDS",
     "UDP_PORT",
     "Diagnostics",
@@ -38,18 +49,23 @@ __all__ = [
     "EsceaConnectionError",
     "EsceaError",
     "EsceaFireplace",
+    "EsceaNcapiClient",
+    "EsceaNcapiError",
     "EsceaPortInUseError",
     "EsceaProtocolError",
     "EsceaStateError",
     "EsceaTransport",
     "EsceaWebClient",
     "FireMode",
+    "FireState",
     "FireplaceState",
     "HomePage",
+    "NcapiStatus",
     "Status",
     "Timer",
     "__version__",
     "async_discover",
     "async_find",
+    "async_probe",
     "mode_from_status",
 ]

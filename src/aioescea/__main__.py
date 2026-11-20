@@ -9,6 +9,8 @@ Examples::
     aioescea mode 192.168.1.50 boost
     aioescea timers 192.168.1.50
     aioescea diagnostics 192.168.1.50 --username 123456 --password 1234
+    aioescea g3-status 192.168.1.60
+    aioescea g3-set 192.168.1.60 --on --mode flame_effect --temp 22.5
 """
 
 from __future__ import annotations
@@ -26,6 +28,7 @@ import aiohttp
 from . import (
     EsceaError,
     EsceaFireplace,
+    EsceaNcapiClient,
     EsceaTransport,
     EsceaWebClient,
     FireMode,
@@ -37,7 +40,24 @@ def _print(value: Any) -> None:
     print(json.dumps(value, indent=2, default=str))
 
 
+async def _run_g3(args: argparse.Namespace) -> None:
+    async with aiohttp.ClientSession() as session:
+        fire = EsceaNcapiClient(session, args.host)
+        if args.command == "g3-set":
+            mode = FireMode(args.mode) if args.mode else None
+            await fire.async_set(
+                on=args.on,
+                fan_boost=None if mode is None else mode is FireMode.BOOST,
+                flame_effect=None if mode is None else mode is FireMode.FLAME_EFFECT,
+                target_temperature=args.temp,
+            )
+        _print(asdict(await fire.async_get_status()))
+
+
 async def _run(args: argparse.Namespace) -> None:
+    if args.command.startswith("g3-"):
+        await _run_g3(args)
+        return
     if args.command in ("timers", "diagnostics"):
         async with aiohttp.ClientSession() as session:
             web = EsceaWebClient(
@@ -106,6 +126,17 @@ def main() -> None:
         web.add_argument("host")
         web.add_argument("--username")
         web.add_argument("--password")
+
+    sub.add_parser("g3-status", help="read a Generation 3 (Wi-Fi) fire").add_argument(
+        "host"
+    )
+    g3 = sub.add_parser("g3-set", help="change a Generation 3 (Wi-Fi) fire")
+    g3.add_argument("host")
+    power = g3.add_mutually_exclusive_group()
+    power.add_argument("--on", dest="on", action="store_true", default=None)
+    power.add_argument("--off", dest="on", action="store_false")
+    g3.add_argument("--mode", choices=[m.value for m in FireMode])
+    g3.add_argument("--temp", type=float)
 
     args = parser.parse_args()
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.WARNING)

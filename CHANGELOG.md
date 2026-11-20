@@ -14,4 +14,7 @@ First release.
   fire by serial number after its IP address changes.
 - Web page client: the fire's clock, both timers (read and write) and the
   diagnostics page.
+- Generation 3 Wi-Fi fires through Escea's NCAPI (HTTP and JSON): state,
+  room temperature, remote presence, stored errors, and on/off, boost, flame
+  effect and target temperature in one request.
 - `aioescea` command-line tool.

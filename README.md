@@ -6,12 +6,17 @@
 
 **Async Python client for Escea gas fireplaces on your local network.** No cloud.
 
-It talks to the fireplace's network controller two ways:
+It supports both generations of Escea network controller:
 
-- **UDP port 3300** for live control: on and off, target temperature, normal,
-  boost and flame effect, and room temperature.
-- **The fire's web page on port 80** for what UDP can't reach: the two daily
-  timers, the fire's clock and the diagnostics page.
+| | Generation 2 (Ethernet) | Generation 3 (Wi-Fi, from 2024) |
+|---|---|---|
+| Control | UDP port 3300 | NCAPI: HTTP and JSON on port 80 |
+| On/off, temperature, boost, flame effect | ✓ (4-30 °C) | ✓ (10-38 °C, 0.1 °C steps) |
+| Room temperature | ✓ | ✓ |
+| What the fire is doing (starting, igniting, heating, shutting down, error) | | ✓ |
+| Remote present, stored errors | | ✓ |
+| Found by broadcast | ✓ | needs its IP address |
+| Built-in timers, clock, diagnostics | ✓ (from its web page) | |
 
 It powers the [Escea Fireplace](https://github.com/olliemaller/ha-escea-fireplace)
 integration for Home Assistant.
@@ -56,7 +61,24 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
-### The web page (timers, clock, diagnostics)
+### Generation 3 (Wi-Fi) fires
+
+Turn on **Escea NCAPI Settings** under Fire Settings in the Escea Smartheat
+app first (fire firmware 1.5.9 or later), and give the fire a DHCP
+reservation.
+
+```python
+import aiohttp
+from aioescea import EsceaNcapiClient
+
+async with aiohttp.ClientSession() as session:
+    fire = EsceaNcapiClient(session, "192.168.1.60")
+    status = await fire.async_get_status()
+    print(status.state, status.room_temperature, status.remote_present)
+    await fire.async_set(on=True, flame_effect=True, target_temperature=22.5)
+```
+
+### The web page (Generation 2: timers, clock, diagnostics)
 
 ```python
 import aiohttp
@@ -115,6 +137,8 @@ aioescea diagnostics 192.168.1.50 --username 123456 --password 1234
 
 - [Fireplace LAN Communications Protocol Specification v0.3](docs/protocol.md)
   (Kamahi Electronics for Escea, 2014): the UDP protocol.
+- [NCAPI](docs/protocol.md#generation-3-ncapi) (Escea document 640051_0,
+  2024): the Generation 3 Wi-Fi HTTP API.
 - [Network summary](docs/protocol.md#controller-network-summary) (Tussock
   Innovation for Escea, 2016): the controller's ports, DHCP behaviour and
   MAC address prefix (`AC:DE:48`).
