@@ -93,6 +93,11 @@ class EsceaFireplace:
         self._host = host
 
     @property
+    def transport(self) -> EsceaTransport:
+        """Return the shared UDP transport."""
+        return self._transport
+
+    @property
     def last_status(self) -> Status | None:
         """Return the most recent status read, if any."""
         return self._last_status
