@@ -14,6 +14,12 @@ Clapham (derekclapham/ha-escea, MIT). Rules this client follows, from that work:
 * Logging in posts MD5 hashes of the username and password to
   ``doLogin.html`` and returns a token, sent back as a ``token`` cookie. On
   most fires the username is the serial number and the password is the PIN.
+* POSTs (the login and timer saves) are sent as one raw packet, not through
+  aiohttp. aiohttp sends the headers and the form in separate TCP segments,
+  and the fire's server only reads the first: it then waits for a body it
+  never sees, so the login hung until it timed out while a browser, which
+  sends both together, logged in fine. The reply is read only until the page
+  is complete, because the server doesn't always close the connection.
 * The timer form also carries the fire's power switch. It must be sent with
   the fire's current power state or saving a timer turns the fire on or off.
 """
@@ -21,12 +27,14 @@ Clapham (derekclapham/ha-escea, MIT). Rules this client follows, from that work:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from dataclasses import dataclass, replace
 from datetime import time as dt_time
 import hashlib
 import html as html_lib
 import logging
 import re
+from urllib.parse import urlencode
 
 import aiohttp
 
@@ -183,6 +191,53 @@ def parse_diagnostics(page: str) -> Diagnostics:
     return Diagnostics(**values)  # type: ignore[arg-type]
 
 
+def _status(raw: bytes) -> int | None:
+    line = raw.split(b"\r\n", 1)[0].split()
+    if len(line) >= 2 and line[0].startswith(b"HTTP/") and line[1].isdigit():
+        return int(line[1])
+    return None
+
+
+def _dechunk(body: bytes) -> bytes:
+    out, rest = b"", body
+    while rest:
+        size_line, _, rest = rest.partition(b"\r\n")
+        try:
+            size = int(size_line.split(b";")[0].strip() or b"0", 16)
+        except ValueError:
+            return body  # not really chunked
+        if size == 0:
+            break
+        out, rest = out + rest[:size], rest[size + 2 :]
+    return out
+
+
+def _body(raw: bytes) -> str:
+    head, _, body = raw.partition(b"\r\n\r\n")
+    if b"transfer-encoding: chunked" in head.lower():
+        body = _dechunk(body)
+    return body.decode("utf-8", errors="replace")
+
+
+def _reply_complete(raw: bytes) -> bool:
+    """True once the whole reply is in, even if the server keeps the line open."""
+    head, sep, body = raw.partition(b"\r\n\r\n")
+    if not sep:
+        return False
+    for line in head.lower().split(b"\r\n"):
+        if line.startswith(b"content-length:"):
+            try:
+                return len(body) >= int(line.split(b":", 1)[1])
+            except ValueError:
+                break
+    if b"transfer-encoding: chunked" in head.lower():
+        return body.endswith(b"0\r\n\r\n")
+    lower = body.lower()
+    return b"</html>" in lower or bool(
+        _TOKEN_INPUT_RE.search(lower.decode("utf-8", errors="replace"))
+    )
+
+
 def _is_login_page(page: str) -> bool:
     """Return True if the fire served a page for visitors who are not logged in.
 
@@ -240,6 +295,8 @@ class EsceaWebClient:
         timeout: float = READ_TIMEOUT,
     ) -> str:
         """Send one request. Callers must hold ``self._lock``."""
+        if method == "POST":
+            return await self._post(path, data or {}, token=token, timeout=timeout)
         cookies = {"token": token} if token else None
         try:
             async with self._session.request(
@@ -256,6 +313,60 @@ class EsceaWebClient:
                 return await response.text(errors="replace")
         except (aiohttp.ClientError, TimeoutError) as err:
             raise EsceaConnectionError(f"{method} /{path} failed: {err}") from err
+
+    def _address(self) -> tuple[str, int]:
+        host, _, port = self._host.rpartition(":")
+        if host and port.isdigit() and "]" not in port:
+            return host.strip("[]"), int(port)
+        return self._host.strip("[]"), 80
+
+    async def _post(
+        self, path: str, data: dict[str, str], *, token: str | None, timeout: float
+    ) -> str:
+        """POST a form in a single write and read the reply until it's complete.
+
+        Callers must hold ``self._lock``.
+        """
+        host, port = self._address()
+        body = urlencode(list(data.items())).encode()
+        head = [
+            f"POST /{path} HTTP/1.1",
+            f"Host: {self._host}",
+            "Content-Type: application/x-www-form-urlencoded",
+            f"Content-Length: {len(body)}",
+            "Connection: close",
+        ]
+        if token:
+            head.append(f"Cookie: token={token}")
+        request = ("\r\n".join(head) + "\r\n\r\n").encode() + body
+        raw = b""
+        try:
+            async with asyncio.timeout(timeout):
+                reader, writer = await asyncio.open_connection(host, port)
+                try:
+                    writer.write(request)
+                    await writer.drain()
+                    while chunk := await reader.read(4096):
+                        raw += chunk
+                        if _reply_complete(raw):
+                            break
+                finally:
+                    writer.close()
+                    with contextlib.suppress(OSError):
+                        await writer.wait_closed()
+        except TimeoutError as err:
+            if not _reply_complete(raw) and not _TOKEN_INPUT_RE.search(_body(raw)):
+                raise EsceaConnectionError(
+                    f"POST /{path} failed: no complete reply in {timeout:.0f} s"
+                ) from err
+        except OSError as err:
+            raise EsceaConnectionError(f"POST /{path} failed: {err}") from err
+        status = _status(raw)
+        if status in (401, 403):
+            raise EsceaAuthError(f"POST /{path}: HTTP {status}")
+        if status is None or status >= 400:
+            raise EsceaConnectionError(f"POST /{path} failed: HTTP {status}")
+        return _body(raw)
 
     async def _login(self) -> str:
         if not self.has_credentials:

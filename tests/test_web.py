@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 from datetime import time
 import hashlib
@@ -10,7 +11,13 @@ import aiohttp
 from aiohttp.test_utils import TestServer
 import pytest
 
-from aioescea import EsceaAuthError, EsceaError, EsceaWebClient, Timer
+from aioescea import (
+    EsceaAuthError,
+    EsceaConnectionError,
+    EsceaError,
+    EsceaWebClient,
+    Timer,
+)
 
 from .fake_web import FakeWeb
 
@@ -146,3 +153,126 @@ async def test_set_timer_after_token_expired(
     assert page.timers[2].enabled is True
     assert len(fake_web.saves) == 2
     assert len(fake_web.logins) == 2
+
+
+# The fire's own server: one read per request, and it doesn't always close. ---
+
+LOGIN_REPLY = (
+    b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n"
+    b'<html><body><input type="hidden" name="token" id="token" value="abc123">'
+    b"</body></html>"
+)
+
+
+async def _one_read_server(
+    reply: bytes, *, close: bool, seen: list[bytes]
+) -> tuple[asyncio.Server, str]:
+    """A server like the fire's: one recv per request, maybe never closing."""
+
+    async def handle(
+        reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+    ) -> None:
+        request = await reader.read(65536)
+        seen.append(request)
+        head, _, body = request.partition(b"\r\n\r\n")
+        length = next(
+            (
+                int(line.split(b":")[1])
+                for line in head.lower().split(b"\r\n")
+                if line.startswith(b"content-length:")
+            ),
+            0,
+        )
+        if len(body) < length:
+            await asyncio.sleep(3600)  # waits for a body it never reads
+        writer.write(reply)
+        await writer.drain()
+        if close:
+            writer.close()
+        else:
+            await asyncio.sleep(3600)
+
+    server = await asyncio.start_server(handle, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    return server, f"127.0.0.1:{port}"
+
+
+@pytest.mark.parametrize("close", [True, False])
+async def test_login_sent_in_one_packet_and_read_until_complete(close: bool) -> None:
+    seen: list[bytes] = []
+    server, host = await _one_read_server(LOGIN_REPLY, close=close, seen=seen)
+    try:
+        async with aiohttp.ClientSession() as session:
+            client = EsceaWebClient(session, host, username="123456", password="1234")
+            async with asyncio.timeout(5):
+                await client.async_validate_login()
+        assert client._token == "abc123"
+        head, _, body = seen[0].partition(b"\r\n\r\n")
+        assert head.startswith(b"POST /doLogin.html HTTP/1.1")
+        assert body.startswith(b"user=")
+        assert b"&password=" in body
+    finally:
+        server.close()
+
+
+async def test_chunked_and_rejected_replies() -> None:
+    seen: list[bytes] = []
+    chunked = (
+        b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n"
+        b"4a\r\n"
+        b'<input type="hidden" name="token" id="token" value="tok">'
+        + b" "
+        * 17
+        + b"\r\n"
+        b"0\r\n\r\n"
+    )
+    server, host = await _one_read_server(chunked, close=False, seen=seen)
+    try:
+        async with aiohttp.ClientSession() as session:
+            client = EsceaWebClient(session, host, username="u", password="p")
+            async with asyncio.timeout(5):
+                await client.async_validate_login()
+            assert client._token == "tok"
+    finally:
+        server.close()
+
+    server, host = await _one_read_server(
+        b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n", close=True, seen=seen
+    )
+    try:
+        async with aiohttp.ClientSession() as session:
+            client = EsceaWebClient(session, host, username="u", password="p")
+            with pytest.raises(EsceaAuthError):
+                await client.async_validate_login()
+    finally:
+        server.close()
+
+
+async def test_post_timeout_and_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    from aioescea import web as web_module
+
+    monkeypatch.setattr(web_module, "LOGIN_TIMEOUT", 0.3)
+    seen: list[bytes] = []
+    server, host = await _one_read_server(
+        b"HTTP/1.1 200 OK\r\n\r\n<html><body>still going", close=False, seen=seen
+    )
+    try:
+        async with aiohttp.ClientSession() as session:
+            client = EsceaWebClient(session, host, username="u", password="p")
+            with pytest.raises(EsceaConnectionError, match="no complete reply"):
+                await client.async_validate_login()
+    finally:
+        server.close()
+
+    async with aiohttp.ClientSession() as session:
+        client = EsceaWebClient(session, "127.0.0.1:1", username="u", password="p")
+        with pytest.raises(EsceaConnectionError):
+            await client.async_validate_login()
+
+
+def test_reply_helpers() -> None:
+    from aioescea.web import _body, _dechunk, _status
+
+    assert _status(b"garbage") is None
+    assert _dechunk(b"zz\r\nhello") == b"zz\r\nhello"
+    assert _body(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nhi") == "hi"

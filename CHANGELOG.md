@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.3
+
+Fixes.
+
+- The web login (and saving timers) hung until it timed out on a real
+  fire, while the same login worked in a browser. aiohttp sends a POST's
+  headers and form in separate TCP segments; the fire's server reads only
+  the first and then waits for a body it never sees. POSTs are now sent as
+  one raw write, and the reply is read only until it's complete, since the
+  server doesn't always close the connection.
+
 ## 0.1.2
 
 Fixes.

@@ -33,7 +33,7 @@ from .protocol import MAX_TEMPERATURE, MIN_TEMPERATURE, Status
 from .transport import UDP_PORT, EsceaTransport
 from .web import Diagnostics, EsceaWebClient, HomePage, Timer
 
-__version__ = "0.1.2"
+__version__ = "0.1.3"
 
 __all__ = [
     "MAC_PREFIX",
