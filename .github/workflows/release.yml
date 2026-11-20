@@ -59,6 +59,18 @@ jobs:
         run: |
           version="${GITHUB_REF_NAME#v}"
           awk -v v="## $version" '$0==v{f=1;next} /^## /{f=0} f' CHANGELOG.md > notes.md
+      # Publishing a release on GitHub creates the tag that starts this
+      # workflow, so the release may already exist: then attach the files and
+      # fill in empty notes instead of creating it.
       - env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" dist/* --title "$GITHUB_REF_NAME" --notes-file notes.md
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" dist/* --clobber
+            body=$(gh release view "$GITHUB_REF_NAME" --json body --jq .body)
+            if [ -z "$(echo "$body" | tr -d '[:space:]')" ] && [ -s notes.md ]; then
+              gh release edit "$GITHUB_REF_NAME" --notes-file notes.md
+            fi
+          else
+            gh release create "$GITHUB_REF_NAME" dist/* --title "$GITHUB_REF_NAME" --notes-file notes.md
+          fi
