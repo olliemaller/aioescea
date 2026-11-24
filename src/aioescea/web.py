@@ -22,11 +22,14 @@ Clapham (derekclapham/ha-escea, MIT). Rules this client follows, from that work:
   is complete, because the server doesn't always close the connection.
 * The timer form also carries the fire's power switch. It must be sent with
   the fire's current power state or saving a timer turns the fire on or off.
+  So the state is checked again right before each POST, not only when the
+  save starts.
 """
 
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 import contextlib
 from dataclasses import dataclass, replace
 from datetime import time as dt_time
@@ -38,7 +41,12 @@ from urllib.parse import urlencode
 
 import aiohttp
 
-from .exceptions import EsceaAuthError, EsceaConnectionError, EsceaError
+from .exceptions import (
+    EsceaAuthError,
+    EsceaConnectionError,
+    EsceaError,
+    EsceaStateError,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -246,6 +254,24 @@ def _is_login_page(page: str) -> bool:
     return "logout" not in page.lower()
 
 
+def _timer_form(timers: dict[int, Timer], fire_is_on: bool) -> dict[str, str]:
+    """Build the timer save form, refusing timers that aren't fully known."""
+    form: dict[str, str] = {"ON_OFF_SWITCH": "On" if fire_is_on else "Off"}
+    for number in TIMER_NUMBERS:
+        timer = timers.get(number)
+        if timer is None or not timer.is_complete:
+            raise EsceaError(f"timer {number} is not fully known; read it first")
+        assert timer.on_time is not None
+        assert timer.off_time is not None
+        form[f"TIMER{number}_ON_TIME"] = timer.on_time.strftime("%H:%M")
+        form[f"TIMER{number}_OFF_TIME"] = timer.off_time.strftime("%H:%M")
+    # The enable switches must come last, in this order, as the device's own
+    # page sends them; otherwise they are accepted and ignored.
+    for number in TIMER_NUMBERS:
+        form[f"TIMER{number}_SW"] = "On" if timers[number].enabled else "Off"
+    return form
+
+
 class EsceaWebClient:
     """Read and write the fire's web page."""
 
@@ -412,75 +438,106 @@ class EsceaWebClient:
             return parse_diagnostics(await self._authed_get("diagnostics.html"))
 
     async def async_set_timers(
-        self, timers: dict[int, Timer], *, fire_is_on: bool
+        self,
+        timers: dict[int, Timer],
+        *,
+        fire_is_on: bool,
+        read_power: Callable[[], Awaitable[bool]] | None = None,
     ) -> HomePage:
         """Write both timers in one request and return the page read back.
 
         ``timers`` must hold both timers, complete. ``fire_is_on`` must be
-        the fire's current power state: the device applies the form's power
-        field too, so a wrong value turns the fire on or off.
+        the fire's power state when the save starts: the device applies the
+        form's power field too, so a wrong value turns the fire on or off.
+
+        ``read_power``, if given, returns whether the fire is on right now.
+        It's called right before each POST (after any login, which can take
+        a minute). If it no longer matches ``fire_is_on``, someone turned
+        the fire on or off while the save waited, so nothing is sent and
+        EsceaStateError is raised. Pass it whenever you can.
         """
-        form: dict[str, str] = {"ON_OFF_SWITCH": "On" if fire_is_on else "Off"}
-        for number in TIMER_NUMBERS:
-            timer = timers.get(number)
-            if timer is None or not timer.is_complete:
-                raise EsceaError(f"timer {number} is not fully known; read it first")
-            assert timer.on_time is not None
-            assert timer.off_time is not None
-            form[f"TIMER{number}_ON_TIME"] = timer.on_time.strftime("%H:%M")
-            form[f"TIMER{number}_OFF_TIME"] = timer.off_time.strftime("%H:%M")
-        # The enable switches must come last, in this order, as the device's
-        # own page sends them; otherwise they are accepted and ignored.
-        for number in TIMER_NUMBERS:
-            form[f"TIMER{number}_SW"] = "On" if timers[number].enabled else "Off"
-
+        form = _timer_form(timers, fire_is_on)
         async with self._lock:
-            if not self.has_credentials:
-                raise EsceaAuthError("no web login set")
-            for attempt in range(2):
-                if self._token is None or attempt:
-                    self._token = await self._login()
-                try:
-                    reply = await self._request(
-                        "POST",
-                        "index.html",
-                        data=form,
-                        token=self._token,
-                        timeout=WRITE_TIMEOUT,
-                    )
-                except EsceaConnectionError:
-                    # The fire can be slow to answer a save (it writes to
-                    # flash). A lost reply doesn't mean a lost save, so check
-                    # by reading back below.
-                    _LOGGER.debug("No reply to timer save; checking by reading back")
-                    break
-                if not _is_login_page(reply):
-                    break
-                # The token had expired, so the fire ignored the form and
-                # served its public page. Log in again and resend once.
-                _LOGGER.debug("Timer save needed a fresh login")
-                self._token = None
-            await asyncio.sleep(1)
-            page = parse_home_page(await self._request("GET", "index.html"))
+            return await self._save_timers(timers, form, fire_is_on, read_power)
 
+    async def async_set_timer(
+        self,
+        timer: Timer,
+        *,
+        fire_is_on: bool,
+        current: dict[int, Timer] | None = None,
+        read_power: Callable[[], Awaitable[bool]] | None = None,
+    ) -> HomePage:
+        """Change one timer, keeping the other as it is.
+
+        Without ``current``, both timers are read from the fire inside the
+        same lock as the save, so a change made meanwhile (say in the Escea
+        app) isn't overwritten. ``fire_is_on`` and ``read_power`` work as in
+        ``async_set_timers``.
+        """
+        async with self._lock:
+            if current is None:
+                page = parse_home_page(await self._request("GET", "index.html"))
+                current = page.timers
+            merged = dict(current)
+            old = current.get(timer.number)
+            if old is not None:
+                timer = replace(
+                    old,
+                    on_time=timer.on_time or old.on_time,
+                    off_time=timer.off_time or old.off_time,
+                    enabled=old.enabled if timer.enabled is None else timer.enabled,
+                )
+            merged[timer.number] = timer
+            form = _timer_form(merged, fire_is_on)
+            return await self._save_timers(merged, form, fire_is_on, read_power)
+
+    async def _save_timers(
+        self,
+        timers: dict[int, Timer],
+        form: dict[str, str],
+        fire_is_on: bool,
+        read_power: Callable[[], Awaitable[bool]] | None,
+    ) -> HomePage:
+        """POST the timer form, then read it back. Callers must hold the lock."""
+        if not self.has_credentials:
+            raise EsceaAuthError("no web login set")
+        for attempt in range(2):
+            if self._token is None or attempt:
+                self._token = await self._login()
+            # Check the power last thing before each POST: the login and a
+            # first try can take minutes, and the form switches the fire.
+            if read_power is not None and await read_power() != fire_is_on:
+                raise EsceaStateError(
+                    "the fire was turned "
+                    + ("off" if fire_is_on else "on")
+                    + " while the timer was saving, so the timer was not saved;"
+                    " try again"
+                )
+            try:
+                reply = await self._request(
+                    "POST",
+                    "index.html",
+                    data=form,
+                    token=self._token,
+                    timeout=WRITE_TIMEOUT,
+                )
+            except EsceaConnectionError:
+                # The fire can be slow to answer a save (it writes to flash).
+                # A lost reply doesn't mean a lost save, so check by reading
+                # back below.
+                _LOGGER.debug("No reply to timer save; checking by reading back")
+                break
+            if not _is_login_page(reply):
+                break
+            # The token had expired, so the fire ignored the form and served
+            # its public page. Log in again and resend once.
+            _LOGGER.debug("Timer save needed a fresh login")
+            self._token = None
+        await asyncio.sleep(1)
+        page = parse_home_page(await self._request("GET", "index.html"))
         for number in TIMER_NUMBERS:
             if page.timers.get(number) != timers[number]:
                 self._token = None
                 raise EsceaError(f"timer {number} did not save")
         return page
-
-    async def async_set_timer(
-        self, timer: Timer, *, fire_is_on: bool, current: dict[int, Timer]
-    ) -> HomePage:
-        """Change one timer, keeping the other as it is in ``current``."""
-        merged = dict(current)
-        old = current.get(timer.number)
-        if old is not None:
-            timer = replace(
-                old,
-                on_time=timer.on_time or old.on_time,
-                off_time=timer.off_time or old.off_time,
-                enabled=old.enabled if timer.enabled is None else timer.enabled,
-            )
-        merged[timer.number] = timer
-        return await self.async_set_timers(merged, fire_is_on=fire_is_on)

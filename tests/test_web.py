@@ -15,6 +15,7 @@ from aioescea import (
     EsceaAuthError,
     EsceaConnectionError,
     EsceaError,
+    EsceaStateError,
     EsceaWebClient,
     Timer,
 )
@@ -153,6 +154,81 @@ async def test_set_timer_after_token_expired(
     assert page.timers[2].enabled is True
     assert len(fake_web.saves) == 2
     assert len(fake_web.logins) == 2
+
+
+async def test_set_timer_fire_turned_off_during_login(
+    web: EsceaWebClient, fake_web: FakeWeb, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The power is read after the login, so a stale "on" is never sent."""
+    fake_web.fire_is_on = True
+    login = web._login
+
+    async def slow_login() -> str:
+        token = await login()
+        fake_web.fire_is_on = False  # turned off with the remote meanwhile
+        return token
+
+    async def read_power() -> bool:
+        return fake_web.fire_is_on
+
+    monkeypatch.setattr(web, "_login", slow_login)
+    with pytest.raises(EsceaStateError, match="turned off"):
+        await web.async_set_timer(
+            Timer(1, time(6, 30), None, None), fire_is_on=True, read_power=read_power
+        )
+    assert fake_web.saves == []
+    assert fake_web.fire_is_on is False
+
+
+async def test_set_timer_resend_reads_power_again(
+    web: EsceaWebClient, fake_web: FakeWeb
+) -> None:
+    """The resend after an expired token checks the power again."""
+    await web.async_validate_login()
+    fake_web.expire_next_token = True
+    reads = iter([False, True])  # turned on between the two POSTs
+
+    async def read_power() -> bool:
+        return next(reads)
+
+    with pytest.raises(EsceaStateError, match="turned on"):
+        await web.async_set_timer(
+            Timer(2, None, None, True), fire_is_on=False, read_power=read_power
+        )
+    assert len(fake_web.saves) == 1  # only the ignored one
+    assert fake_web.fire_is_on is False
+
+
+async def test_set_timer_reads_power_before_each_post(
+    web: EsceaWebClient, fake_web: FakeWeb
+) -> None:
+    await web.async_validate_login()
+    fake_web.expire_next_token = True
+    reads: list[bool] = []
+
+    async def read_power() -> bool:
+        reads.append(fake_web.fire_is_on)
+        return fake_web.fire_is_on
+
+    page = await web.async_set_timer(
+        Timer(2, None, None, True), fire_is_on=False, read_power=read_power
+    )
+    assert page.timers[2].enabled is True
+    assert reads == [False, False]
+    assert len(fake_web.saves) == 2
+
+
+async def test_set_timer_reads_other_timer_fresh(
+    web: EsceaWebClient, fake_web: FakeWeb
+) -> None:
+    """Without ``current``, the other timer comes from the fire, not a cache."""
+    await web.async_get_home_page()
+    fake_web.timers[2] = ["17:00", "23:00", True]  # changed in the app
+    page = await web.async_set_timer(
+        Timer(1, time(6, 30), None, None), fire_is_on=False
+    )
+    assert page.timers[1] == Timer(1, time(6, 30), time(8, 0), True)
+    assert page.timers[2] == Timer(2, time(17, 0), time(23, 0), True)
 
 
 # The fire's own server: one read per request, and it doesn't always close. ---

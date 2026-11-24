@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.1.4
+
+Released 24 November 2026. Safety fix.
+
+- Saving a timer could turn the fire back on (or off). The save form also
+  carries the fire's power switch, and the power state was read once, before
+  a login that can take a minute. `async_set_timers` and `async_set_timer`
+  take a new `read_power` callable, which is called right before each POST,
+  including the resend after an expired login. If the fire was turned on or
+  off since the save started, nothing is sent and `EsceaStateError` is
+  raised.
+- `async_set_timer` no longer needs `current`. Without it, both timers are
+  read from the fire inside the same lock as the save, so a change made in
+  the Escea app meanwhile isn't undone.
+- The tests run on macOS: the fake fire now listens on 127.0.0.1 with its
+  own port, not 127.0.0.2.
+- The README lists every command-line command and option, and its links
+  work on PyPI.
+
 ## 0.1.3
 
 Fixes.
