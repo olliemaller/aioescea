@@ -2,7 +2,7 @@
 
 [![PyPI](https://img.shields.io/pypi/v/aioescea?style=for-the-badge&color=FFFFFF&labelColor=000000)](https://pypi.org/project/aioescea/)
 [![Checks](https://img.shields.io/github/actions/workflow/status/olliemaller/aioescea/ci.yml?branch=main&style=for-the-badge&label=checks&labelColor=000000)](https://github.com/olliemaller/aioescea/actions/workflows/ci.yml)
-[![Licence](https://img.shields.io/github/license/olliemaller/aioescea?style=for-the-badge&color=FFFFFF&labelColor=000000)](LICENSE)
+[![Licence](https://img.shields.io/github/license/olliemaller/aioescea?style=for-the-badge&color=FFFFFF&labelColor=000000)](https://github.com/olliemaller/aioescea/blob/main/LICENSE)
 
 **Async Python client for Escea gas fireplaces on your local network.** No cloud.
 
@@ -91,10 +91,16 @@ async with aiohttp.ClientSession() as session:
     print(page.clock, page.timers)
     print(await web.async_get_diagnostics())  # login needed
 
+    # fire is an EsceaFireplace for the same fire, as above.
+    async def read_power() -> bool:  # whether the fire is on right now
+        return (await fire.async_get_status()).is_on
+
+    # Reads the other timer from the fire, and checks the power again right
+    # before sending, because the save form also switches the fire on or off.
     await web.async_set_timer(
         Timer(number=1, on_time=time(6, 30), off_time=time(8, 0), enabled=True),
-        fire_is_on=False,  # must be the fire's real power state right now
-        current=page.timers,
+        fire_is_on=await read_power(),
+        read_power=read_power,
     )
 ```
 
@@ -112,7 +118,23 @@ aioescea mode 192.168.1.50 boost
 aioescea off 192.168.1.50
 aioescea timers 192.168.1.50
 aioescea diagnostics 192.168.1.50 --username 123456 --password 1234
+aioescea g3-status 192.168.1.60
+aioescea g3-set 192.168.1.60 --on --mode flame_effect --temp 22.5
 ```
+
+| Command | What it does |
+|---|---|
+| `discover [--broadcast ADDRESS] [--timeout SECONDS]` | Find Generation 2 fires by broadcast. Repeat `--broadcast` for more than one address (default 255.255.255.255); `--timeout` defaults to 5 s. |
+| `status HOST`, `on HOST`, `off HOST` | Read the live status, light the fire, or turn it off. |
+| `temp HOST DEGREES` | Set the target temperature (whole degrees). |
+| `mode HOST {normal,boost,flame_effect} [--allow-ignite]` | Set the mode. Boost or flame effect on a fire that's off is refused unless you add `--allow-ignite`, because it would light the fire. |
+| `timers HOST` | Read the clock, temperatures and timers from the web page. |
+| `diagnostics HOST --username U --password P` | Read the diagnostics web page. |
+| `g3-status HOST` | Read a Generation 3 (Wi-Fi) fire. |
+| `g3-set HOST [--on \| --off] [--mode MODE] [--temp DEGREES]` | Change a Generation 3 fire. `--temp` takes decimals, such as 22.5. |
+
+Add `-v` (or `--verbose`) before the command for debug logging, for example
+`aioescea -v status 192.168.1.50`.
 
 ## How it behaves
 
@@ -135,11 +157,11 @@ aioescea diagnostics 192.168.1.50 --username 123456 --password 1234
 
 ## Protocol
 
-- [Fireplace LAN Communications Protocol Specification v0.3](docs/protocol.md)
+- [Fireplace LAN Communications Protocol Specification v0.3](https://github.com/olliemaller/aioescea/blob/main/docs/protocol.md)
   (Kamahi Electronics for Escea, 2014): the UDP protocol.
-- [NCAPI](docs/protocol.md#generation-3-ncapi) (Escea document 640051_0,
+- [NCAPI](https://github.com/olliemaller/aioescea/blob/main/docs/protocol.md#generation-3-ncapi) (Escea document 640051_0,
   2024): the Generation 3 Wi-Fi HTTP API.
-- [Network summary](docs/protocol.md#controller-network-summary) (Tussock
+- [Network summary](https://github.com/olliemaller/aioescea/blob/main/docs/protocol.md#controller-network-summary) (Tussock
   Innovation for Escea, 2016): the controller's ports, DHCP behaviour and
   MAC address prefix (`AC:DE:48`).
 
@@ -154,4 +176,4 @@ aioescea diagnostics 192.168.1.50 --username 123456 --password 1234
 
 ## Licence
 
-[MIT](LICENSE)
+[MIT](https://github.com/olliemaller/aioescea/blob/main/LICENSE)
