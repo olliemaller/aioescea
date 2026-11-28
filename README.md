@@ -2,7 +2,9 @@
 
 [![PyPI](https://img.shields.io/pypi/v/aioescea?style=for-the-badge&color=FFFFFF&labelColor=000000)](https://pypi.org/project/aioescea/)
 [![Checks](https://img.shields.io/github/actions/workflow/status/olliemaller/aioescea/ci.yml?branch=main&style=for-the-badge&label=checks&labelColor=000000)](https://github.com/olliemaller/aioescea/actions/workflows/ci.yml)
-[![Licence](https://img.shields.io/github/license/olliemaller/aioescea?style=for-the-badge&color=FFFFFF&labelColor=000000)](https://github.com/olliemaller/aioescea/blob/main/LICENSE)
+[![Licence](https://img.shields.io/badge/licence-MIT-FFFFFF?style=for-the-badge&labelColor=000000)](https://github.com/olliemaller/aioescea/blob/main/LICENSE)
+[![Read the write-up](https://img.shields.io/badge/Read-the%20write--up-FFFFFF?style=for-the-badge&labelColor=000000)](https://maller.com.au/projects/escea-fireplace/)
+[![maller.com.au](https://img.shields.io/badge/Site-maller.com.au-FFFFFF?style=for-the-badge&labelColor=000000)](https://maller.com.au/)
 
 **Async Python client for Escea gas fireplaces on your local network.** No cloud.
 
